@@ -1,51 +1,73 @@
 # FPGA DS18B20 Temperature Monitor with LCD Display
 
-A hardware design in Verilog that reads temperature from a **DS18B20** digital sensor over the **1-Wire** protocol and displays the result on a character **LCD**, implemented on an Intel/Altera **Cyclone IV EP4CE6** FPGA.
+A Verilog design that reads temperature from a **DS18B20** digital sensor over the **1-Wire** protocol and shows the result on an **HD44780-compatible character LCD** (8-bit mode). The 1-Wire master is implemented entirely in hardware as an FSM on an Intel/Altera **Cyclone IV EP4CE6** FPGA, with no soft processor.
 
 ## Demo
 
-[![Demo video](https://img.youtube.com/vi/YOUR_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+'in folder docs'
 
-> Watch the full demo on YouTube: https://www.youtube.com/watch?v=YOUR_VIDEO_ID
+## How It Works
 
-## Overview
+The FPGA acts as the 1-Wire bus master and repeats this cycle forever:
 
-The FPGA acts as a 1-Wire master. It periodically issues a temperature conversion command to the DS18B20, reads back the raw 16-bit result, converts it to a decimal value, and drives an LCD to show the temperature in real time.
+```
+Reset + presence check
+   -> Skip ROM (0xCC) -> Convert T (0x44) -> wait 750 ms
+   -> Reset + presence check
+   -> Skip ROM (0xCC) -> Read Scratchpad (0xBE)
+   -> read temperature bits (LSB first)
+   -> wait 4 ms -> repeat
+```
 
-## Features
+The raw 12-bit reading (1/16 °C per LSB) is converted to decimal digits and shown on the LCD with one decimal place, refreshed continuously.
 
-- Bit-accurate 1-Wire master implemented in hardware (reset/presence, write slot, read slot)
-- FSM-based control of the DS18B20 command sequence (Skip ROM, Convert T, Read Scratchpad)
-- Binary-to-decimal conversion of the temperature reading
-- LCD driver module for displaying the temperature
-- Fully synchronous design, single system clock
+## Architecture
+
+All logic is in `src/lcd.v`, split into three modules:
+
+| Module | Role |
+|--------|------|
+| `hehe` | 1-Wire master FSM: reset/presence, write slots, read slots, command sequencing, 750 ms conversion wait |
+| `ds18b20_12bit_to_decimal` | Converts the 12-bit sensor value to hundreds / tens / units / one fractional digit and a sign flag |
+| `lcd` (top level) | HD44780 initialization and display state machine; instantiates the two modules above |
+
+```
+                       +------------------------- FPGA -------------------------+
+ DS18B20 <--- DQ ----> |  hehe (1-Wire FSM) --> 12-bit to decimal --> LCD FSM   | --> LCD
+ (4.7k pull-up)        +--------------------------------------------------------+
+```
+
+## 1-Wire Timing (50 MHz system clock)
+
+| Operation | Timing |
+|-----------|--------|
+| Reset pulse (low) | 500 us |
+| Presence sample | about 60 us after release |
+| Write 0 | 70 us low, 5 us release |
+| Write 1 | 8 us low, 72 us release |
+| Read slot | 4 us low, sample shortly after release, 55 us recovery |
+| Conversion wait | 750 ms (12-bit resolution) |
+
+## LCD Output
+
+HD44780 in 8-bit mode, 2 lines. Line 1 shows the label `Nhiet do:` and the reading follows on the same line, for example `Nhiet do: 28.6`. The sign is shown for negative values and leading zeros are blanked.
 
 ## Hardware
 
 | Item | Description |
 |------|-------------|
-| FPGA board | Intel/Altera Cyclone IV EP4CE6 |
-| Sensor | DS18B20 (1-Wire digital thermometer) |
-| Display | Character LCD |
+| FPGA board | Intel/Altera Cyclone IV EP4CE6, 50 MHz clock |
+| Sensor | DS18B20 on a single 1-Wire bus, 4.7 kOhm pull-up to 3.3 V |
+| Display | HD44780-compatible character LCD (8-bit data bus, RW tied low) |
 | Tool | Quartus II |
-
-## System Architecture
-
-```
-          +---------------------------------------------+
-          |                    FPGA                     |
-          |                                             |
-DS18B20 <-+-> 1-Wire Master FSM --> BCD Converter --> LCD Driver --> LCD
- (DQ)     |                                             |
-          +---------------------------------------------+
-```
 
 ## Project Structure
 
 ```
 fpga-ds18b20-temp-lcd/
-├── src/        # Verilog source files (1-Wire master, LCD driver, top level)
-├── docs/       # Block diagrams, waveforms, photos
+├── src/
+│   └── lcd.v        # hehe, ds18b20_12bit_to_decimal, lcd (top level)
+├── docs/            # Demo video, photos, waveforms
 └── README.md
 ```
 
@@ -55,17 +77,26 @@ fpga-ds18b20-temp-lcd/
    ```bash
    git clone https://github.com/minhmoivaonghe/fpga-ds18b20-temp-lcd.git
    ```
-2. Open Quartus II and create a new project targeting **EP4CE6**.
-3. Add all files from `src/` and set the top-level entity.
-4. Assign pins for the clock, DS18B20 data line (with a 4.7 kΩ pull-up to 3.3 V) and LCD.
-5. Compile and program the board.
+2. In Quartus II, create a project for **EP4CE6** and add `src/lcd.v`.
+3. Set **`lcd`** as the top-level entity.
+4. Assign pins:
 
-## Results
+   | Signal | Description |
+   |--------|-------------|
+   | `clock` | 50 MHz board clock |
+   | `ds18b20` | Sensor data line (bidirectional) |
+   | `LCD_EN`, `LCD_RS`, `LCD_RW` | LCD control |
+   | `LCD_DATA[7:0]` | LCD data bus |
+5. Compile, program the FPGA, and the temperature appears on the LCD.
 
-The measured temperature is shown on the LCD and updates continuously. See the demo video above.
+## Limitations
+
+- Uses Skip ROM, so only **one** DS18B20 may be on the bus.
+- No CRC check on the scratchpad data.
+- Display resolution is one decimal digit (the sensor provides 0.0625 °C).
 
 ## Author
 
-**Do Thanh Minh** — Electrical/Electronic Engineering student, Industrial University of Ho Chi Minh City (IUH)
+**Do Thanh Minh** - Electrical/Electronic Engineering student, Industrial University of Ho Chi Minh City (IUH)
 Interested in FPGA design and Design Verification.
 GitHub: [@minhmoivaonghe](https://github.com/minhmoivaonghe)
